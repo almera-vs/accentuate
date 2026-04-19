@@ -49,6 +49,7 @@ enum StringOrArray: Decodable {
 final class AccentEngine {
     let name: String
     private let data: AccentData
+    private let asciiWordRegex = try! NSRegularExpression(pattern: #"\b[A-Za-z][A-Za-z']*\b"#)
 
     init?(name: String) {
         self.name = name
@@ -75,6 +76,10 @@ final class AccentEngine {
         if let dict = data.end       { text = applyPass(text, dict: dict, mode: .wordEnd)   }
         if let dict = data.syllables { text = applyPass(text, dict: dict, mode: .anywhere)  }
 
+        if name == "swedish" {
+            text = applyNordicFallback(text)
+        }
+
         text = text.trimmingCharacters(in: .whitespaces)
 
         // Mirrors: if(speech_data["appends"] && prob(1))
@@ -93,7 +98,11 @@ final class AccentEngine {
     private enum Mode { case fullWord, wordStart, wordEnd, anywhere }
 
     private func applyPass(_ text: String, dict: [String: StringOrArray], mode: Mode) -> String {
-        dict.reduce(text) { applyRule($0, key: $1.key, value: $1.value.value, mode: mode) }
+        let orderedRules = dict.sorted {
+            if $0.key.count != $1.key.count { return $0.key.count > $1.key.count }
+            return $0.key < $1.key
+        }
+        return orderedRules.reduce(text) { applyRule($0, key: $1.key, value: $1.value.value, mode: mode) }
     }
 
     /// Applies one replacement rule with the correct number of case-preserving passes
@@ -117,10 +126,21 @@ final class AccentEngine {
                 .reduce(text) { replaceWithBoundary($0, key: $1.0, value: $1.1, mode: mode) }
         case .fullWord, .wordStart:
             // Three passes — DM REGEX_FULLWORD and REGEX_STARTWORD both include capitalize.
-            return [(key.uppercased(), value.uppercased()),
-                    (firstUpperRest(key), firstUpperRest(value)),
-                    (key, value)]
-                .reduce(text) { replaceWithBoundary($0, key: $1.0, value: $1.1, mode: mode) }
+            let capKey = firstUpperRest(key)
+            let capValue = firstUpperRest(value)
+            let upperKey = key.uppercased()
+            let upperValue = value.uppercased()
+
+            // For single-letter keys (e.g. "i"), capitalize and uppercase keys are identical.
+            // Prefer "Ja" over "JA" by skipping the all-caps replacement in that overlap case.
+            let passes: [(String, String)]
+            if capKey == upperKey {
+                passes = [(capKey, capValue), (key, value)]
+            } else {
+                passes = [(upperKey, upperValue), (capKey, capValue), (key, value)]
+            }
+
+            return passes.reduce(text) { replaceWithBoundary($0, key: $1.0, value: $1.1, mode: mode) }
         }
     }
 
@@ -134,6 +154,114 @@ final class AccentEngine {
         case .anywhere:  fatalError("unreachable")
         }
         return text.replacingOccurrences(of: pattern, with: value, options: .regularExpression)
+    }
+
+    private func applyNordicFallback(_ text: String) -> String {
+        let protected = swedishProtectedTokens()
+        let nsText = text as NSString
+        let matches = asciiWordRegex.matches(in: text, range: NSRange(location: 0, length: nsText.length))
+        let mutable = NSMutableString(string: text)
+
+        for match in matches.reversed() {
+            let word = nsText.substring(with: match.range)
+            let lower = word.lowercased()
+
+            if word.count < 4 || protected.contains(lower) {
+                continue
+            }
+
+            let stylized = stylizeNordicWord(word)
+            if stylized != word {
+                mutable.replaceCharacters(in: match.range, with: stylized)
+            }
+        }
+
+        return mutable as String
+    }
+
+    private func swedishProtectedTokens() -> Set<String> {
+        guard let words = data.words else { return [] }
+
+        var tokens = Set<String>()
+        for value in words.values {
+            let variants: [String]
+            switch value {
+            case .string(let s):
+                variants = [s]
+            case .array(let a):
+                variants = a
+            }
+
+            for variant in variants {
+                for token in variant.lowercased().split(whereSeparator: { ch in
+                    !(ch.unicodeScalars.allSatisfy { $0.properties.isAlphabetic } || ch == "'")
+                }) {
+                    tokens.insert(String(token))
+                }
+            }
+        }
+
+        return tokens
+    }
+
+    private func stylizeNordicWord(_ word: String) -> String {
+        let lower = word.lowercased()
+        var styled = lower
+
+        let replacements: [(String, String)] = [
+            ("tion", "sjon"),
+            ("sion", "sjon"),
+            ("ae", "æ"),
+            ("oe", "ø"),
+            ("oo", "ø"),
+            ("ou", "u"),
+            ("ow", "å"),
+            ("wh", "v"),
+            ("th", "d"),
+            ("qu", "kv"),
+            ("ck", "k"),
+            ("ph", "f"),
+            ("w", "v")
+        ]
+
+        for (from, to) in replacements {
+            styled = styled.replacingOccurrences(of: from, with: to)
+        }
+
+        // Soft vowel fallback for untouched words.
+        // Keep Nordic flavor, but do not force a -> æ (only explicit ae -> æ above).
+        if styled == lower {
+            if styled.contains("e") {
+                styled = replaceFirst(in: styled, target: "e", replacement: "ä")
+            } else if styled.contains("i") {
+                styled = replaceFirst(in: styled, target: "i", replacement: "y")
+            } else if styled.contains("u") {
+                styled = replaceFirst(in: styled, target: "u", replacement: "ø")
+            } else if styled.contains("o") {
+                styled = replaceFirst(in: styled, target: "o", replacement: "ø")
+            }
+        }
+
+        return restoreCase(from: word, to: styled)
+    }
+
+    private func replaceFirst(in text: String, target: Character, replacement: Character) -> String {
+        guard let idx = text.firstIndex(of: target) else { return text }
+        var out = text
+        out.replaceSubrange(idx...idx, with: String(replacement))
+        return out
+    }
+
+    private func restoreCase(from original: String, to replacement: String) -> String {
+        if original == original.uppercased() {
+            return replacement.uppercased()
+        }
+
+        if original == firstUpperRest(original.lowercased()) {
+            return firstUpperRest(replacement)
+        }
+
+        return replacement
     }
 
     /// Uppercases only the first character, leaving the rest unchanged.
