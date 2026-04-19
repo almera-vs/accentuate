@@ -1,0 +1,16 @@
+This project vendors a subset of BeeStation-Hornet for reference data and
+algorithm parity.
+
+Upstream project:
+- https://github.com/BeeStation/BeeStation-Hornet
+
+Vendored files in this repository:
+- reference/beestation/strings/accent_*.json
+- reference/beestation/code/modules/language/accents/accents.dm
+- reference/beestation/LICENSE
+
+License for those vendored files:
+- GNU Affero General Public License v3.0 (AGPL-3.0)
+
+The repository LICENSE is AGPL-3.0 for distribution compatibility with the
+vendored accent assets and reference implementation.
