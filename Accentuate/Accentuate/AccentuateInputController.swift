@@ -27,9 +27,9 @@ class AccentuateInputController: IMKInputController {
         }
 
         switch event.keyCode {
-        case 51: return handleBackspace(client: sender)  // ⌫
-        case 36: return handleReturn(client: sender)     // ↩
-        case 53: return handleEscape(client: sender)     // ⎋
+        case 51: return handleBackspace(client: sender)
+        case 36: return handleReturn(client: sender)
+        case 53: return handleEscape(client: sender)
         default:
             guard let chars = event.characters, !chars.isEmpty else { return false }
             if chars.count != 1 {
@@ -89,28 +89,6 @@ class AccentuateInputController: IMKInputController {
     }
 
     // MARK: - Menu bar menu
-
-    override func menu() -> NSMenu! {
-        let menu = NSMenu(title: "Accentuate")
-        let manager = AccentManager.shared
-        for accent in manager.available {
-            let item = NSMenuItem(
-                title: accent.displayName,
-                action: #selector(didSelectAccent(_:)),
-                keyEquivalent: ""
-            )
-            item.representedObject = accent.id
-            item.target = self
-            item.state = accent.id == manager.selectedID ? .on : .off
-            menu.addItem(item)
-        }
-        return menu
-    }
-
-    @objc private func didSelectAccent(_ item: NSMenuItem) {
-        guard let id = item.representedObject as? String else { return }
-        AccentManager.shared.selectedID = id
-    }
 
     // MARK: - Buffer operations
 
@@ -232,7 +210,7 @@ class AccentuateInputController: IMKInputController {
             )
             buffer = ""
         }
-        return false  // let the app handle ↩ (submit / newline)
+        return false
     }
 
     private func handleEscape(client sender: Any?) -> Bool {
@@ -248,17 +226,13 @@ class AccentuateInputController: IMKInputController {
 
     // MARK: - Character classification
 
-    // Word characters begin composition. Apostrophe and hyphen are included
-    // so contractions ("don't") and hyphenated words start naturally.
     private func isWordCharacter(_ s: String) -> Bool {
         guard let first = s.first else { return false }
         return first.isLetter || first.isNumber || first == "'" || first == "-"
     }
 
-    // Rejects ASCII control characters and the private-use range macOS uses for
-    // function/arrow key codes (0xF700–0xF8FF).
     private func isPrintable(_ s: String) -> Bool {
-        return s.unicodeScalars.allSatisfy { scalar in
+        s.unicodeScalars.allSatisfy { scalar in
             let v = scalar.value
             guard v >= 0x20, v != 0x7F else { return false }
             guard v < 0xF700 || v > 0xF8FF else { return false }
